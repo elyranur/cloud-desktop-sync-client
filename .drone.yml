@@ -1,0 +1,152 @@
+kind: pipeline
+name: qt-5.15
+
+steps:
+  - name: cmake
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - cmake -DCMAKE_C_COMPILER=gcc-10 -DCMAKE_CXX_COMPILER=g++-10 -DCMAKE_BUILD_TYPE=Debug -DBUILD_UPDATER=ON -DBUILD_TESTING=1 -DECM_ENABLE_SANITIZERS=address ../src
+  - name: compile
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - make -j$(nproc)
+  - name: test
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - useradd -m -s /bin/bash test
+      - chown -R test:test .
+      - su -c 'ASAN_OPTIONS=detect_leaks=0 xvfb-run ctest --output-on-failure' test
+
+volumes:
+  - name: build
+    temp: {}
+
+trigger:
+  branch:
+    - master
+    - stable-*
+  event:
+    - pull_request
+    - push
+
+---
+kind: pipeline
+name: qt-5.15-clang
+
+steps:
+  - name: cmake
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - cmake -GNinja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_C_COMPILER=clang-10 -DCMAKE_CXX_COMPILER=clazy -DCMAKE_BUILD_TYPE=Debug -DBUILD_UPDATER=ON -DBUILD_TESTING=1 -DECM_ENABLE_SANITIZERS=address ../src
+  - name: compile
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - ninja 2>1 | /drone/src/admin/linux/count_compiler_warnings.py /drone/src
+  - name: test
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - cd /drone/build
+      - useradd -m -s /bin/bash test
+      - chown -R test:test .
+      - su -c 'ASAN_OPTIONS=detect_leaks=0 xvfb-run ctest --output-on-failure' test
+  - name: clang-tidy
+    image: ghcr.io/elyranur/continuous-integration-client:client-5.15-2
+    volumes:
+      - name: build
+        path: /drone/build
+    commands:
+      - "! run-clang-tidy-10 -j$(nproc) -p /drone/build -header-filter $PWD -quiet | grep -A 5 ': error:'"
+
+volumes:
+  - name: build
+    temp: {}
+
+trigger:
+  branch:
+    - master
+    - stable-*
+  event:
+    - pull_request
+    - push
+
+---
+kind: pipeline
+name: AppImage
+
+steps:
+  - name: build
+    image: ghcr.io/elyranur/continuous-integration-client-appimage:client-appimage-2
+    environment:
+      CI_UPLOAD_GIT_TOKEN:
+        from_secret: CI_UPLOAD_GIT_TOKEN
+      CI_UPLOAD_GIT_USERNAME:
+        from_secret: CI_UPLOAD_GIT_USERNAME
+    commands:
+      - /bin/bash -c "./admin/linux/build-appimage.sh"
+      - /bin/bash -c "./admin/linux/upload-appimage.sh" || echo "Upload failed, however this is an optional step."
+trigger:
+  branch:
+    - master
+    - stable-*
+  event:
+    - pull_request
+    - push
+---
+kind: pipeline
+name: Debian
+
+steps:
+  - name: build
+    image: ghcr.io/elyranur/continuous-integration-client-debian:client-debian-3
+    commands:
+      - /bin/bash -c "./admin/linux/debian/drone-build.sh" || echo "[WARNING] Debian build failed but this is a non-blocking CI event"
+    environment:
+      DEBIAN_SECRET_KEY:
+        from_secret: DEBIAN_SECRET_KEY
+      DEBIAN_SECRET_IV:
+        from_secret: DEBIAN_SECRET_IV
+trigger:
+  branch:
+    - master
+  event:
+    - pull_request
+    - push
+---
+kind: pipeline
+name: Documentation
+
+steps:
+  - name: build
+    image: elyranurci/documentation:documentation-5
+    commands:
+      - cd doc
+      - make html
+trigger:
+  branch:
+    - master
+  event:
+    - pull_request
+    - push
